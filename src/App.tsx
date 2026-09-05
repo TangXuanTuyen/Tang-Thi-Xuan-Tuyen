@@ -919,6 +919,8 @@ export default function App() {
             onToggleSlotActive={handleToggleSlotActive}
             onUpdateSlotDetection={handleUpdateSlotDetection}
             sensitivity={settings.motionSensitivity}
+            onUpdateSensitivity={(val) => setSettings((s) => ({ ...s, motionSensitivity: val }))}
+            onToggleDemoMode={() => setSettings((s) => ({ ...s, isDemoMode: !s.isDemoMode }))}
           />
         )}
 

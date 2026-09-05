@@ -11,7 +11,9 @@ import {
   Square, 
   Upload, 
   Trash2,
-  Sparkles
+  Sparkles,
+  Camera,
+  CameraOff
 } from 'lucide-react';
 import { GameSettings, MusicTrackId } from '../types';
 import { soundFx, MUSIC_TRACKS } from '../utils/soundEffects';
@@ -472,6 +474,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 checked={settings.soundEnabled}
                 onChange={(e) => onUpdateSettings({ soundEnabled: e.target.checked })}
                 className="w-4 h-4 accent-orange-500 rounded cursor-pointer"
+              />
+            </div>
+          </div>
+
+          {/* 5. Camera & Cảm biến bắt chuyển động */}
+          <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 space-y-4">
+            <h3 className="text-xs uppercase font-extrabold text-cyan-400 tracking-wider flex items-center gap-2">
+              <Camera size={14} />
+              <span>Camera & Cảm Biến Bắt Chuyển Động</span>
+            </h3>
+
+            {/* Motion Sensitivity Slider */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-slate-300">
+                  Độ nhạy bắt chuyển động (AI Frame Differencing):
+                </span>
+                <span className="text-sm font-black text-cyan-400 font-mono">
+                  {settings.motionSensitivity}/10
+                </span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                value={settings.motionSensitivity}
+                onChange={(e) => onUpdateSettings({ motionSensitivity: Number(e.target.value) })}
+                className="w-full accent-cyan-500 h-2 bg-slate-800 rounded-lg cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                <span>1 (Ít nhạy, cho phòng học chói sáng)</span>
+                <span>5 (Chuẩn khuyên dùng)</span>
+                <span>10 (Cực nhạy, phát hiện cựa quậy nhẹ)</span>
+              </div>
+            </div>
+
+            {/* Demo Mode Toggle */}
+            <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div>
+                <span className="text-xs font-bold text-slate-200 block">
+                  Chế độ Demo (Không cần Webcam):
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  Dùng hoạt họa nhân vật nếu máy tính của trường không có camera hoặc camera bị hỏng.
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.isDemoMode}
+                onChange={(e) => onUpdateSettings({ isDemoMode: e.target.checked })}
+                className="w-4 h-4 accent-orange-500 rounded cursor-pointer shrink-0 ml-3"
               />
             </div>
           </div>

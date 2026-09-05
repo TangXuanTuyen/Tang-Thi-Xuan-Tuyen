@@ -7,7 +7,9 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Activity, 
-  UserCheck
+  UserCheck,
+  Sliders,
+  Play
 } from 'lucide-react';
 import { GameState, PlayerSlot, Team } from '../types';
 import { CameraMotionDetector, ZoneDetectionResult } from '../utils/motionDetector';
@@ -23,6 +25,8 @@ interface CameraViewProps {
   onToggleSlotActive?: (slotId: 1 | 2 | 3) => void;
   onUpdateSlotDetection?: (results: ZoneDetectionResult) => void;
   sensitivity: number;
+  onUpdateSensitivity?: (val: number) => void;
+  onToggleDemoMode?: () => void;
 }
 
 export const CameraView: React.FC<CameraViewProps> = ({
@@ -36,6 +40,8 @@ export const CameraView: React.FC<CameraViewProps> = ({
   onToggleSlotActive,
   onUpdateSlotDetection,
   sensitivity,
+  onUpdateSensitivity,
+  onToggleDemoMode,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const motionDetectorRef = useRef<CameraMotionDetector | null>(null);
@@ -46,8 +52,9 @@ export const CameraView: React.FC<CameraViewProps> = ({
   const [isCameraLoading, setIsCameraLoading] = useState<boolean>(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isFlipped, setIsFlipped] = useState<boolean>(true);
+  const [showQuickSettings, setShowQuickSettings] = useState<boolean>(false);
 
-  // Keep onUpdateSlotDetectionRef in sync without triggering effects
+  // Keep callback reference updated without triggering re-initialization
   useEffect(() => {
     onUpdateSlotDetectionRef.current = onUpdateSlotDetection;
   }, [onUpdateSlotDetection]);
@@ -62,28 +69,32 @@ export const CameraView: React.FC<CameraViewProps> = ({
     });
     motionDetectorRef.current = detector;
 
-    if (videoRef.current && stream) {
-      detector.setVideoElement(videoRef.current);
-      detector.start();
-    }
-
     return () => {
       detector.stop();
       motionDetectorRef.current = null;
     };
   }, []);
 
-  // Update sensitivity without re-instantiating detector
+  // Sync sensitivity dynamically
   useEffect(() => {
     motionDetectorRef.current?.setSensitivity(sensitivity);
   }, [sensitivity]);
 
-  // Update flip mapping without re-instantiating detector
+  // Sync flip mirroring dynamically
   useEffect(() => {
     motionDetectorRef.current?.setIsFlipped(isFlipped);
   }, [isFlipped]);
 
-  // Start / Stop Camera based on isDemoMode
+  // Helper to start the detector once video element is actually playing frames
+  const setupDetectorWithVideo = (video: HTMLVideoElement) => {
+    if (!motionDetectorRef.current) return;
+    motionDetectorRef.current.setVideoElement(video);
+    motionDetectorRef.current.setIsFlipped(isFlipped);
+    motionDetectorRef.current.setSensitivity(sensitivity);
+    motionDetectorRef.current.start();
+  };
+
+  // Start Camera with resilient constraints & fallbacks
   const startCamera = async () => {
     if (isDemoMode) return;
     setIsCameraLoading(true);
@@ -94,31 +105,57 @@ export const CameraView: React.FC<CameraViewProps> = ({
         stream.getTracks().forEach((track) => track.stop());
       }
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user',
-        },
-        audio: false,
-      });
+      let mediaStream: MediaStream;
+
+      // 1. Try ideal constraints (HD, selfie facingMode)
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user',
+          },
+          audio: false,
+        });
+      } catch {
+        // 2. Fallback to basic video constraint for external USB webcams that don't support facingMode
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      }
 
       setStream(mediaStream);
       setHasCameraPermission(true);
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.play().catch(() => {});
-        if (motionDetectorRef.current) {
-          motionDetectorRef.current.setVideoElement(videoRef.current);
-          motionDetectorRef.current.setIsFlipped(isFlipped);
-          motionDetectorRef.current.setSensitivity(sensitivity);
-          motionDetectorRef.current.start();
-        }
+      const video = videoRef.current;
+      if (video) {
+        // Explicitly set muted & playsInline for guaranteed autoplay in all browsers
+        video.muted = true;
+        video.playsInline = true;
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('muted', 'true');
+        video.srcObject = mediaStream;
+
+        video.onloadedmetadata = () => {
+          video.play().catch(() => {});
+          setupDetectorWithVideo(video);
+        };
+
+        video.oncanplay = () => {
+          setupDetectorWithVideo(video);
+        };
+
+        video.play().catch(() => {});
+        setupDetectorWithVideo(video);
       }
     } catch (err: unknown) {
       console.warn('Camera access issue:', err);
-      const errorMsg = err instanceof Error ? err.message : 'Không thể truy cập camera.';
+      const errorMsg = err instanceof Error 
+        ? (err.name === 'NotAllowedError' 
+            ? 'Trình duyệt chưa được cấp quyền camera. Vui lòng bấm vào biểu tượng ổ khóa hoặc camera trên thanh địa chỉ để Cho phép (Allow).'
+            : err.message)
+        : 'Không thể truy cập camera.';
       setCameraError(errorMsg);
       setHasCameraPermission(false);
     } finally {
@@ -146,14 +183,13 @@ export const CameraView: React.FC<CameraViewProps> = ({
     };
   }, [isDemoMode]);
 
-  // Handle active slot helper
   const getTeamForSlot = (teamId: string) => {
     return teams.find((t) => t.id === teamId) || teams[0];
   };
 
   return (
     <div className="relative w-full aspect-video bg-slate-950 rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl flex items-center justify-center select-none group">
-      {/* 1. Real Camera Feed */}
+      {/* 1. Real Camera Video Feed */}
       {!isDemoMode && (
         <video
           ref={videoRef}
@@ -161,11 +197,13 @@ export const CameraView: React.FC<CameraViewProps> = ({
           playsInline
           muted
           onPlay={() => {
-            if (videoRef.current && motionDetectorRef.current) {
-              motionDetectorRef.current.setVideoElement(videoRef.current);
-              motionDetectorRef.current.setIsFlipped(isFlipped);
-              motionDetectorRef.current.setSensitivity(sensitivity);
-              motionDetectorRef.current.start();
+            if (videoRef.current) {
+              setupDetectorWithVideo(videoRef.current);
+            }
+          }}
+          onLoadedData={() => {
+            if (videoRef.current) {
+              setupDetectorWithVideo(videoRef.current);
             }
           }}
           className={`w-full h-full object-cover transition-transform duration-300 ${
@@ -177,7 +215,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
       {/* 2. Demo Mode Animated Studio Background */}
       {isDemoMode && (
         <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-indigo-950/70 to-slate-950 flex items-center justify-center overflow-hidden">
-          {/* Animated Studio Lights */}
           <div className="absolute top-0 left-1/4 w-96 h-96 bg-orange-500/10 rounded-full blur-3xl animate-pulse pointer-events-none" />
           <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse pointer-events-none" />
           <div className="absolute inset-0 bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:24px_24px] opacity-30 pointer-events-none" />
@@ -186,27 +223,34 @@ export const CameraView: React.FC<CameraViewProps> = ({
 
       {/* Camera Permission / Error Overlay */}
       {!isDemoMode && hasCameraPermission === false && (
-        <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20">
+        <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-30">
           <div className="w-16 h-16 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 mb-4 shadow-lg">
             <CameraOff size={32} />
           </div>
           <h3 className="text-xl font-bold text-slate-100 mb-2">
             Không thể kích hoạt Camera
           </h3>
-          <p className="text-sm text-slate-400 max-w-md mb-6 leading-relaxed">
-            {cameraError || 'Trình duyệt chưa được cấp quyền camera hoặc thiết bị không có webcam.'}
-            <br />
-            Bạn có thể thử cấp quyền lại hoặc chuyển sang <strong>DEMO MODE</strong> để tiếp tục chơi ngay mà không cần camera!
+          <p className="text-sm text-slate-300 max-w-md mb-6 leading-relaxed">
+            {cameraError || 'Trình duyệt chưa được cấp quyền camera hoặc thiết bị không tìm thấy webcam.'}
           </p>
           <div className="flex gap-3 flex-wrap justify-center">
             <button
               onClick={startCamera}
               disabled={isCameraLoading}
-              className="flex items-center gap-2 px-5 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-semibold shadow-lg shadow-orange-600/30 transition text-sm"
+              className="flex items-center gap-2 px-5 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-600/30 transition text-sm cursor-pointer"
             >
               <RefreshCw size={16} className={isCameraLoading ? 'animate-spin' : ''} />
               Thử lại Camera
             </button>
+            {onToggleDemoMode && (
+              <button
+                onClick={onToggleDemoMode}
+                className="flex items-center gap-2 px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 rounded-xl font-bold transition text-sm cursor-pointer"
+              >
+                <Play size={16} />
+                Chơi ngay bằng Chế độ Demo
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -216,7 +260,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
       {gameState === 'FREEZE' && (
         <div className="absolute inset-0 border-8 border-cyan-400/80 bg-cyan-950/30 backdrop-contrast-125 z-10 pointer-events-none animate-pulse flex items-center justify-center">
           <div className="absolute top-4 left-4 text-cyan-300 text-sm font-black flex items-center gap-2 tracking-wider bg-cyan-900/60 px-3 py-1 rounded-lg border border-cyan-400/40 shadow-lg">
-            <span>❄️ FREEZE ACTIVE</span>
+            <span>❄️ BẤT ĐỘNG! FREEZE ACTIVE</span>
           </div>
         </div>
       )}
@@ -245,6 +289,13 @@ export const CameraView: React.FC<CameraViewProps> = ({
           const isWinner = winnerSlot === slot.slotId;
           const isScanning = gameState === 'SCANNING';
           const isPicking = gameState === 'RANDOM_PICK';
+
+          // Color for motion level
+          const motionColor = slot.motionLevel <= 10 
+            ? '#10B981' // emerald
+            : slot.motionLevel <= 35 
+            ? '#F59E0B' // amber
+            : '#EF4444'; // red
 
           return (
             <div
@@ -391,12 +442,12 @@ export const CameraView: React.FC<CameraViewProps> = ({
                 {isWinner && (
                   <div className="mt-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black text-xs sm:text-sm px-3 py-1 rounded-full shadow-lg flex items-center gap-1.5 animate-bounce">
                     <Sparkles size={14} />
-                    <span>ĐỨNG YÊN NHANH NHẤT!</span>
+                    <span>ĐỨNG YÊN TỐT NHẤT!</span>
                   </div>
                 )}
               </div>
 
-              {/* Bottom HUD: Team Name & Motion Meter */}
+              {/* Bottom HUD: Team Name & Live Motion Meter */}
               <div className="bg-slate-900/90 backdrop-blur-md rounded-xl p-2 sm:p-2.5 border border-slate-700/80 shadow-lg z-10">
                 <div className="flex items-center justify-between gap-1 mb-1.5">
                   <div className="flex items-center gap-1.5 min-w-0">
@@ -416,15 +467,23 @@ export const CameraView: React.FC<CameraViewProps> = ({
                   </span>
                 </div>
 
-                {/* Motion level meter bar */}
-                <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden flex items-center border border-slate-800">
-                  <div
-                    className="h-full transition-all duration-150 rounded-full"
-                    style={{
-                      width: `${Math.max(10, Math.min(100, slot.motionLevel || (slot.present ? 65 : 20)))}%`,
-                      backgroundColor: team.color,
-                    }}
-                  />
+                {/* Motion level meter bar with responsive level & color */}
+                <div className="space-y-0.5">
+                  <div className="flex justify-between items-center text-[10px] font-mono text-slate-400">
+                    <span>Chuyển động:</span>
+                    <span className="font-bold" style={{ color: motionColor }}>
+                      {slot.motionLevel ?? 0}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden flex items-center border border-slate-800">
+                    <div
+                      className="h-full transition-all duration-100 rounded-full"
+                      style={{
+                        width: `${Math.max(4, Math.min(100, slot.motionLevel ?? 0))}%`,
+                        backgroundColor: motionColor,
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -434,14 +493,49 @@ export const CameraView: React.FC<CameraViewProps> = ({
 
       {/* Top Camera Controls on Hover */}
       {!isDemoMode && (
-        <div className="absolute top-3 left-3 z-20 flex items-center gap-2 opacity-80 hover:opacity-100 transition">
+        <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setIsFlipped(!isFlipped)}
-            className="p-1.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 rounded-lg text-xs font-semibold border border-slate-700 transition"
-            title="Lật gương camera (Flip)"
+            className="px-2.5 py-1.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 shadow-md flex items-center gap-1.5 transition cursor-pointer"
+            title="Lật gương camera (Selfie Mirror)"
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={13} />
+            <span className="hidden sm:inline">Lật gương</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setShowQuickSettings(!showQuickSettings)}
+            className="px-2.5 py-1.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 shadow-md flex items-center gap-1.5 transition cursor-pointer"
+            title="Điều chỉnh độ nhạy camera"
+          >
+            <Sliders size={13} />
+            <span className="hidden sm:inline">Độ nhạy: {sensitivity}/10</span>
+          </button>
+
+          {/* Quick Sensitivity Flyout */}
+          {showQuickSettings && onUpdateSensitivity && (
+            <div className="absolute top-10 left-0 bg-slate-900/95 border border-slate-700 p-3 rounded-2xl shadow-2xl z-30 w-64 space-y-2 animate-in fade-in zoom-in-95">
+              <div className="flex justify-between items-center text-xs font-bold text-slate-200">
+                <span>Độ nhạy bắt chuyển động:</span>
+                <span className="text-amber-400 font-mono text-sm">{sensitivity}/10</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                value={sensitivity}
+                onChange={(e) => onUpdateSensitivity(Number(e.target.value))}
+                className="w-full accent-orange-500 h-2 bg-slate-800 rounded-lg cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] text-slate-400">
+                <span>1 (Ít nhạy)</span>
+                <span>5 (Chuẩn)</span>
+                <span>10 (Rất nhạy)</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

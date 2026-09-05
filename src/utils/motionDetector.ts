@@ -1,7 +1,7 @@
 /**
  * Real-time 3-Zone Motion and Presence Analyzer for Classrooms
- * Analyzes video feed locally in memory via Canvas.
- * No images or video frames are saved or transmitted.
+ * Analyzes video feed locally in memory via Canvas frame differencing.
+ * No images or video frames are saved or transmitted outside the browser.
  */
 
 export interface ZoneDetectionResult {
@@ -18,15 +18,16 @@ export class CameraMotionDetector {
   private animationFrameId: number | null = null;
   private sensitivity: number = 5; // 1 to 10
   private isFlipped: boolean = true; // Mirrors camera feed like selfie view
-  private lastVideoTime: number = -1;
   private smoothedMotion: { [key: number]: number } = { 1: 0, 2: 0, 3: 0 };
   private onDetectionCallback: ((result: ZoneDetectionResult) => void) | null = null;
   private isAnalyzing: boolean = false;
+  private lastProcessTime: number = 0;
+  private readonly targetIntervalMs: number = 50; // ~20 fps for optimal human motion delta
 
   constructor() {
     if (typeof window !== 'undefined') {
       this.canvasEl = document.createElement('canvas');
-      this.canvasEl.width = 160; // downsampled for fast 60fps processing
+      this.canvasEl.width = 160; // downsampled for fast, lightweight processing
       this.canvasEl.height = 90;
       this.ctx = this.canvasEl.getContext('2d', { willReadFrequently: true });
     }
@@ -52,7 +53,7 @@ export class CameraMotionDetector {
     if (this.isAnalyzing) return;
     this.isAnalyzing = true;
     this.prevFrameData = null;
-    this.lastVideoTime = -1;
+    this.lastProcessTime = 0;
     this.processLoop();
   }
 
@@ -63,116 +64,140 @@ export class CameraMotionDetector {
       this.animationFrameId = null;
     }
     this.prevFrameData = null;
-    this.lastVideoTime = -1;
+    this.lastProcessTime = 0;
   }
 
   private processLoop = () => {
     if (!this.isAnalyzing) return;
 
-    if (this.videoEl && this.ctx && this.videoEl.readyState >= 2 && !this.videoEl.paused && !this.videoEl.ended) {
-      // Avoid processing duplicate frames from webcam (prevents false 0-motion spikes)
-      if (this.videoEl.currentTime > 0 && this.videoEl.currentTime === this.lastVideoTime && this.prevFrameData) {
-        this.animationFrameId = requestAnimationFrame(this.processLoop);
-        return;
-      }
-      this.lastVideoTime = this.videoEl.currentTime;
+    const now = performance.now();
+    const timeSinceLast = now - this.lastProcessTime;
 
-      const width = this.canvasEl!.width;
-      const height = this.canvasEl!.height;
+    // Check if video is loaded, playing, and has valid dimensions
+    if (
+      this.videoEl &&
+      this.ctx &&
+      this.canvasEl &&
+      this.videoEl.readyState >= 2 &&
+      this.videoEl.videoWidth > 0 &&
+      this.videoEl.videoHeight > 0 &&
+      !this.videoEl.paused &&
+      !this.videoEl.ended
+    ) {
+      // Process at ~20fps (every ~50ms) to allow real physical movement between frames
+      if (timeSinceLast >= this.targetIntervalMs) {
+        this.lastProcessTime = now;
 
-      try {
-        this.ctx.drawImage(this.videoEl, 0, 0, width, height);
-        const currentFrame = this.ctx.getImageData(0, 0, width, height);
-        const currData = currentFrame.data;
+        const width = this.canvasEl.width;
+        const height = this.canvasEl.height;
 
-        if (this.prevFrameData) {
-          const zoneWidth = Math.floor(width / 3);
-          const zoneChangedPixels = [0, 0, 0];
-          const zoneDiffSum = [0, 0, 0];
-          const zonePixelCounts = [0, 0, 0];
-          const zoneLuminanceVariance = [0, 0, 0];
+        try {
+          this.ctx.drawImage(this.videoEl, 0, 0, width, height);
+          const currentFrame = this.ctx.getImageData(0, 0, width, height);
+          const currData = currentFrame.data;
 
-          // Threshold based on sensitivity (1 to 10)
-          // Sensitivity 5 gives ~15 threshold, sensitive to movement while ignoring sensor noise
-          const diffThreshold = Math.max(7, 22 - this.sensitivity * 1.4);
+          if (this.prevFrameData && this.prevFrameData.length === currData.length) {
+            const zoneWidth = Math.floor(width / 3);
+            const zoneChangedPixels = [0, 0, 0];
+            const zoneDiffSum = [0, 0, 0];
+            const zonePixelCounts = [0, 0, 0];
+            const zoneLuminanceVariance = [0, 0, 0];
 
-          for (let y = 0; y < height; y += 2) {
-            for (let x = 0; x < width; x += 2) {
-              const idx = (y * width + x) * 4;
-              const rawZoneIdx = Math.min(2, Math.floor(x / zoneWidth));
+            // Sensitivity 1 (least sensitive, threshold 16) to 10 (most sensitive, threshold 5)
+            // Default 5 gives diffThreshold = 10.5
+            const diffThreshold = Math.max(5, 17 - this.sensitivity * 1.2);
 
-              const rDiff = Math.abs(currData[idx] - this.prevFrameData[idx]);
-              const gDiff = Math.abs(currData[idx + 1] - this.prevFrameData[idx + 1]);
-              const bDiff = Math.abs(currData[idx + 2] - this.prevFrameData[idx + 2]);
-              const avgDiff = (rDiff + gDiff + bDiff) / 3;
+            // Step through pixels (sampling every 2nd pixel in x & y for high speed & low CPU)
+            for (let y = 0; y < height; y += 2) {
+              for (let x = 0; x < width; x += 2) {
+                const idx = (y * width + x) * 4;
+                const rawZoneIdx = Math.min(2, Math.floor(x / zoneWidth));
 
-              // Check if pixel changed significantly
-              if (avgDiff > diffThreshold) {
-                zoneChangedPixels[rawZoneIdx]++;
-                zoneDiffSum[rawZoneIdx] += avgDiff;
+                const rDiff = Math.abs(currData[idx] - this.prevFrameData[idx]);
+                const gDiff = Math.abs(currData[idx + 1] - this.prevFrameData[idx + 1]);
+                const bDiff = Math.abs(currData[idx + 2] - this.prevFrameData[idx + 2]);
+                const avgDiff = (rDiff + gDiff + bDiff) / 3;
+
+                if (avgDiff > diffThreshold) {
+                  zoneChangedPixels[rawZoneIdx]++;
+                  zoneDiffSum[rawZoneIdx] += avgDiff;
+                }
+                zonePixelCounts[rawZoneIdx]++;
+
+                // Calculate luminance variance to verify human presence in zone
+                const lum = 0.299 * currData[idx] + 0.587 * currData[idx + 1] + 0.114 * currData[idx + 2];
+                zoneLuminanceVariance[rawZoneIdx] += Math.abs(lum - 128);
               }
-              zonePixelCounts[rawZoneIdx]++;
-
-              // Luminance for presence check
-              const lum = 0.299 * currData[idx] + 0.587 * currData[idx + 1] + 0.114 * currData[idx + 2];
-              zoneLuminanceVariance[rawZoneIdx] += Math.abs(lum - 128);
             }
-          }
 
-          // Build result with correct flipped-zone mapping:
-          // In mirrored video, screen left (Slot 1) corresponds to camera right (rawZone 2)
-          const result: ZoneDetectionResult = {
-            1: { present: true, motionLevel: 0, confidence: 90 },
-            2: { present: true, motionLevel: 0, confidence: 90 },
-            3: { present: true, motionLevel: 0, confidence: 90 },
-          };
-
-          for (let rawZone = 0; rawZone < 3; rawZone++) {
-            const count = zonePixelCounts[rawZone] || 1;
-            const changedRatio = (zoneChangedPixels[rawZone] / count) * 100; // 0% to 100%
-            const avgDiffMagnitude = zoneChangedPixels[rawZone] > 0
-              ? (zoneDiffSum[rawZone] / zoneChangedPixels[rawZone])
-              : 0;
-
-            // Combine pixel change percentage and intensity
-            let rawMotion = (changedRatio * 2.2) + (avgDiffMagnitude * 0.4);
-            // Suppress minor background noise grain if very few pixels changed
-            if (changedRatio < 1.6) {
-              rawMotion = rawMotion * 0.35;
-            }
-            const normalizedMotion = Math.min(100, Math.max(0, Math.round(rawMotion)));
-
-            const lumScore = zoneLuminanceVariance[rawZone] / count;
-            const isPresent = lumScore > 8 || normalizedMotion > 4;
-            const confidence = Math.min(99, Math.max(50, Math.round(50 + normalizedMotion * 0.4 + lumScore * 0.3)));
-
-            // Map raw zone index to screen slot key based on horizontal flip
-            const slotKey = (this.isFlipped ? (3 - rawZone) : (rawZone + 1)) as 1 | 2 | 3;
-
-            // Smooth motion with Exponential Moving Average (70% current, 30% previous)
-            const prev = this.smoothedMotion[slotKey] ?? normalizedMotion;
-            const smoothed = Math.round(prev * 0.3 + normalizedMotion * 0.7);
-            this.smoothedMotion[slotKey] = smoothed;
-
-            result[slotKey] = {
-              present: isPresent,
-              motionLevel: smoothed,
-              confidence: confidence,
+            // Build result for the 3 classroom zones
+            const result: ZoneDetectionResult = {
+              1: { present: true, motionLevel: 0, confidence: 90 },
+              2: { present: true, motionLevel: 0, confidence: 90 },
+              3: { present: true, motionLevel: 0, confidence: 90 },
             };
+
+            for (let rawZone = 0; rawZone < 3; rawZone++) {
+              const count = zonePixelCounts[rawZone] || 1;
+              const changedRatio = (zoneChangedPixels[rawZone] / count) * 100; // 0% to 100%
+              const avgDiffMagnitude = zoneChangedPixels[rawZone] > 0
+                ? (zoneDiffSum[rawZone] / zoneChangedPixels[rawZone])
+                : 0;
+
+              // Sensor noise floor threshold (ambient camera noise)
+              const noiseFloor = Math.max(0.2, 0.6 - this.sensitivity * 0.04);
+              let rawMotion = 0;
+
+              if (changedRatio > noiseFloor) {
+                // Actual physical motion detected
+                const effectiveRatio = changedRatio - noiseFloor;
+                // Scale motion so that:
+                // - Small head/hand twitch (~1% changed pixels) -> ~15-25%
+                // - Active arm waving (~3-5% changed pixels) -> ~45-65%
+                // - Jumping / full body dancing (~8%+ changed pixels) -> ~80-100%
+                rawMotion = (effectiveRatio * 8.8) + (avgDiffMagnitude * 0.4);
+              }
+
+              const normalizedMotion = Math.min(100, Math.max(0, Math.round(rawMotion)));
+
+              const lumScore = zoneLuminanceVariance[rawZone] / count;
+              const isPresent = lumScore > 6 || normalizedMotion > 3;
+              const confidence = Math.min(99, Math.max(50, Math.round(50 + normalizedMotion * 0.4 + lumScore * 0.3)));
+
+              // Map raw zone index to screen slot key based on horizontal flip
+              const slotKey = (this.isFlipped ? (3 - rawZone) : (rawZone + 1)) as 1 | 2 | 3;
+
+              // Fast attack (immediate reaction to movement), smooth release (prevents flickering)
+              const prev = this.smoothedMotion[slotKey] ?? normalizedMotion;
+              let smoothed = normalizedMotion;
+              if (normalizedMotion > prev) {
+                smoothed = Math.round(prev * 0.2 + normalizedMotion * 0.8);
+              } else {
+                smoothed = Math.round(prev * 0.65 + normalizedMotion * 0.35);
+              }
+
+              this.smoothedMotion[slotKey] = smoothed;
+
+              result[slotKey] = {
+                present: isPresent,
+                motionLevel: smoothed,
+                confidence: confidence,
+              };
+            }
+
+            if (this.onDetectionCallback) {
+              this.onDetectionCallback(result);
+            }
           }
 
-          if (this.onDetectionCallback) {
-            this.onDetectionCallback(result);
+          // Store current frame as previous reference
+          if (!this.prevFrameData || this.prevFrameData.length !== currData.length) {
+            this.prevFrameData = new Uint8ClampedArray(currData.length);
           }
+          this.prevFrameData.set(currData);
+        } catch {
+          // Ignore transient draw/decode errors
         }
-
-        // Store copy of current frame for next comparison
-        if (!this.prevFrameData || this.prevFrameData.length !== currData.length) {
-          this.prevFrameData = new Uint8ClampedArray(currData.length);
-        }
-        this.prevFrameData.set(currData);
-      } catch {
-        // Ignore cross-origin frame capture errors if any
       }
     }
 
