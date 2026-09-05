@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Teacher profile in the educational platform",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email", "description": "Teacher email address" },
+        "name": { "type": "string", "description": "Teacher display name", "maxLength": 100 },
+        "school": { "type": "string", "description": "School name", "maxLength": 150 },
+        "createdAt": { "type": "string", "description": "Account creation timestamp" }
+      },
+      "required": ["email", "name", "createdAt"]
+    },
+    "QuestionSet": {
+      "title": "QuestionSet",
+      "description": "A collection of questions created or copied by a teacher",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique question set identifier" },
+        "ownerId": { "type": "string", "description": "Teacher UID who owns this set" },
+        "ownerName": { "type": "string", "description": "Display name of the author", "maxLength": 100 },
+        "title": { "type": "string", "description": "Title of the question set", "maxLength": 200 },
+        "description": { "type": "string", "description": "Description of the set", "maxLength": 1000 },
+        "subject": { "type": "string", "description": "School subject", "maxLength": 100 },
+        "grade": { "type": "string", "description": "Grade level (e.g. Lớp 6, Tiểu học)", "maxLength": 50 },
+        "questionCount": { "type": "number", "description": "Total number of questions" },
+        "visibility": { "type": "string", "enum": ["private", "shared", "public"], "description": "Access level" },
+        "shareCode": { "type": "string", "description": "6-character share code", "maxLength": 12 },
+        "createdAt": { "type": "string", "description": "Creation ISO date or server timestamp" },
+        "updatedAt": { "type": "string", "description": "Last updated ISO date or server timestamp" }
+      },
+      "required": ["ownerId", "title", "subject", "questionCount", "visibility", "shareCode", "createdAt", "updatedAt"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "An individual quiz question belonging to a QuestionSet",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique question ID" },
+        "questionSetId": { "type": "string", "description": "ID of parent question set" },
+        "ownerId": { "type": "string", "description": "Teacher UID for fast list authorization" },
+        "order": { "type": "number", "description": "Position order in the set" },
+        "type": { "type": "string", "enum": ["MULTIPLE_CHOICE", "SHORT_ANSWER"], "description": "Question type" },
+        "question": { "type": "string", "description": "Question text content", "maxLength": 2000 },
+        "options": { "type": "array", "description": "Options A, B, C, D" },
+        "correctAnswer": { "type": "string", "description": "Correct answer index (0-3) or string" },
+        "explanation": { "type": "string", "description": "Explanation for the correct answer", "maxLength": 2000 },
+        "imageUrl": { "type": "string", "description": "Optional illustration image URL", "maxLength": 1000 },
+        "points": { "type": "number", "description": "Points awarded for correct answer" },
+        "subject": { "type": "string", "description": "Subject category", "maxLength": 100 }
+      },
+      "required": ["questionSetId", "ownerId", "order", "question", "correctAnswer", "points"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Private teacher profile documents"
+    },
+    "/questionSets/{questionSetId}": {
+      "schema": "QuestionSet",
+      "description": "Question sets owned by teachers or shared publicly"
+    },
+    "/questions/{questionId}": {
+      "schema": "Question",
+      "description": "Questions linked to question sets"
+    }
+  }
+}

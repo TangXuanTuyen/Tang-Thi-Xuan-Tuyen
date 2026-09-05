@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@keyframes scanline {
+  0% {
+    top: 0%;
+  }
+  50% {
+    top: 98%;
+  }
+  100% {
+    top: 0%;
+  }
+}
+
+.animate-scanline {
+  position: absolute;
+  animation: scanline 2.2s ease-in-out infinite;
+}
+
+/* Print Styles for Certificate of Merit */
+@media print {
+  body {
+    background: transparent !important;
+    color: black !important;
+  }
+  
+  .no-print, header, nav, button, .modal-backdrop {
+    display: none !important;
+  }
+
+  .certificate-paper {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    border-width: 12px !important;
+    page-break-inside: avoid !important;
+  }
+
+  @page {
+    size: landscape;
+    margin: 0;
+  }
+}

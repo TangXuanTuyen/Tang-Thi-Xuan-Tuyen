@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation for User profile
+    function isValidUser(data) {
+      return data.email is string && data.email.size() <= 150 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.createdAt is string && data.createdAt.size() <= 50;
+    }
+
+    // Validation for QuestionSet
+    function isValidQuestionSet(data) {
+      return data.ownerId == request.auth.uid &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             data.subject is string && data.subject.size() <= 100 &&
+             data.questionCount is number && data.questionCount >= 0 &&
+             data.visibility in ['private', 'shared', 'public'] &&
+             data.shareCode is string && data.shareCode.size() <= 20 &&
+             data.createdAt is string && data.createdAt.size() <= 50 &&
+             data.updatedAt is string && data.updatedAt.size() <= 50;
+    }
+
+    // Validation for Question
+    function isValidQuestion(data) {
+      return data.questionSetId is string && data.questionSetId.size() <= 128 &&
+             data.ownerId == request.auth.uid &&
+             data.question is string && data.question.size() > 0 && data.question.size() <= 2000 &&
+             data.points is number && data.points >= 0 && data.points <= 1000 &&
+             data.order is number &&
+             data.options is list && data.options.size() <= 10;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming());
+      allow delete: if false;
+    }
+
+    // QuestionSets collection
+    match /questionSets/{questionSetId} {
+      // Single read: allowed if owner or if public/shared
+      allow get: if (isSignedIn() && existing().ownerId == request.auth.uid) ||
+                    (existing().visibility in ['public', 'shared']);
+      
+      // List: allowed for owner listing their own sets, or anyone querying public sets
+      allow list: if (isSignedIn() && resource.data.ownerId == request.auth.uid) ||
+                    (resource.data.visibility == 'public') ||
+                    (resource.data.visibility == 'shared');
+
+      allow create: if isSignedIn() && isValidQuestionSet(incoming());
+
+      allow update: if isSignedIn() &&
+                       existing().ownerId == request.auth.uid &&
+                       incoming().ownerId == request.auth.uid &&
+                       isValidQuestionSet(incoming());
+
+      allow delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    // Questions collection
+    match /questions/{questionId} {
+      // Single read
+      allow get: if (isSignedIn() && existing().ownerId == request.auth.uid) ||
+                    (resource.data.questionSetId != null);
+
+      // List: Allow owner to list their questions or query questions of a set
+      allow list: if (isSignedIn() && resource.data.ownerId == request.auth.uid) ||
+                    (resource.data.questionSetId is string);
+
+      allow create: if isSignedIn() && isValidQuestion(incoming());
+
+      allow update: if isSignedIn() &&
+                       existing().ownerId == request.auth.uid &&
+                       incoming().ownerId == request.auth.uid &&
+                       isValidQuestion(incoming());
+
+      allow delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+  }
+}

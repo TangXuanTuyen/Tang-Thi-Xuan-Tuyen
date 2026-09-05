@@ -1,0 +1,6 @@
+{
+  "name": "Freeze & Win – AI Chọn Người",
+  "description": "Game show giáo dục tương tác lớp học: FREEZE & WIN sử dụng camera/AI phát hiện chuyển động, random pick người chơi giành quyền trả lời câu hỏi.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
